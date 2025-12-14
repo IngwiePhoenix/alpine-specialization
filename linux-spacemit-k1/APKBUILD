@@ -1,0 +1,199 @@
+
+# Contributor: Ingwie Phoenix <ingwie@birb.it>
+# Maintainer: Ingwie Phoenix <ingwie@birb.it>
+pkgname=linux-spacemit-k1
+# Using Tag version here
+_tag=k1-bl-v2.2.7-release
+pkgver=2.2.7
+pkgrel=0
+pkgdesc="Linux Kernel image for the SpacemiT K1"
+url="https://github.com/spacemit-com/linux-6.6/tree/k1-bl-v2.2.y"
+arch="riscv64"
+_karch=riscv
+license="GPL-2.0-only"
+# NOTE(IP): -doc is currently missing; can't seem to make it work...
+subpackages="$pkgname-dev"
+builddir="$srcdir/"
+depends="initramfs-generator"
+_depends_dev="perl gmp-dev elfutils-dev bash mpc1-dev mpfr-dev"
+makedepends="$_depends_dev gcc sed installkernel bc linux-headers-spacemit-k1
+	bison flex openssl-dev>3 findutils xz mawk ccache
+"
+_kernver=${pkgver%.*}
+options="!strip !check"
+source="https://github.com/spacemit-com/linux-6.6/archive/refs/tags/${_tag}.tar.gz
+	common-changes.config
+"
+
+
+builddir="$srcdir"/linux-6.6-$_tag
+_builddir="$srcdir"/build-$pkgname
+
+prepare() {
+	default_prepare
+
+	# remove localversion from patch if any
+	rm -f localversion*
+
+	mkdir -p "$_builddir"
+	echo "-$pkgrel" > "$_builddir"/localversion-alpine
+	_genconfig
+	make -C "$builddir" \
+		O="$_builddir" \
+		ARCH="$_karch" \
+		olddefconfig
+	_verifyconfig $flavor
+}
+
+# generate config from defconfig and apply local changes.
+# common-changes.config holds a list of = delimited
+# config command and values used by kernel scripts/config script.
+_genconfig() {
+	local defconfig=
+
+	cp "$builddir"/arch/riscv/configs/k1_defconfig \
+		"$_builddir"/.config
+
+	while read line; do
+		# skip comments
+		case "$line" in
+			"#"*|""|[[:space:]]*) continue;;
+		esac
+
+		local option=${line%%=*} str=
+		local cmd=$(echo $line | cut -d= -f2)
+		msg "... handling: $line"
+		case "$cmd" in
+			y) cmd="enable";;
+			n) cmd="disable";;
+			m) cmd="module";;
+			'"'*) cmd="set-str"; str="${line#*=}";;
+			[0-9]*) cmd="set-val"; str="${line#*=}";;
+			*) die "Command '$cmd' not accepted" ;;
+		esac
+		msg "[$pkgname] $cmd: $option $str"
+		"$builddir"/scripts/config \
+			--file "$_builddir"/.config \
+			--$cmd "$option" "${str//\"/}"
+	done < "$srcdir"/common-changes.config
+}
+
+# verify if options are set to correct value
+_verifyconfig() {
+	while read line; do
+		[ ${line:0:1} = "#" ] && continue
+		local option=${line%%=*} str= invert=
+		local cmd=$(echo $line | cut -d= -f2)
+		case "$cmd" in
+			enable) str="$option=y" ;;
+			disable) str="$option"; invert="-v" ;;
+			module) str="$option=m" ;;
+			set-val) str="$option=${line##*=}" ;;
+			set-str) str=${line##*=}
+				str="$option=\"${str//\"/}\"" ;;
+		esac
+		grep -q $invert "^$str" "$_builddir"/.config || \
+			die "Config: $option not properly set!"
+	done < "$srcdir"/common-changes.config
+}
+
+build() {
+	unset LDFLAGS
+	# for some reason these sometimes leak into the kernel build,
+	# -Werror=format-security breaks some stuff
+	unset CFLAGS CPPFLAGS CXXFLAGS
+	cd "$_builddir"
+	make ARCH="$_karch" CC="${CC:-ccache gcc}" \
+		AWK=mawk \
+		KBUILD_BUILD_VERSION="$((pkgrel + 1 ))-Alpine" \
+                -j$(nproc)
+                # V=2 --debug=b SHELL="/bin/bash -x" KBUILD_VERBOSE=1 -j1
+}
+
+package() {
+	local _outdir="$pkgdir"
+
+	cd "$_builddir"
+	local _abi_release="$(make -s kernelrelease)"
+	mkdir -p "$_outdir"/boot "$_outdir"/lib/modules
+
+	local _install="install dtbs_install"
+
+	# modules_install seems to regenerate a defect Modules.symvers. Work
+	# around it by backing it up and restore it after modules_install
+	cp Module.symvers Module.symvers.backup
+
+	local INSTALL_DTBS_PATH="$_outdir"/boot/dtb
+	make modules_install $_install \
+		ARCH="$_karch" \
+		INSTALL_MOD_PATH="$_outdir" \
+		INSTALL_PATH="$_outdir"/boot \
+		INSTALL_DTBS_PATH="$INSTALL_DTBS_PATH"
+	cp Module.symvers.backup Module.symvers
+
+	rm -f "$_outdir"/lib/modules/$_abi_release/build \
+		"$_outdir"/lib/modules/$_abi_release/source
+	rm -rf "$_outdir"/lib/firmware
+
+	install -D -m644 include/config/kernel.release \
+		"$_outdir"/usr/share/kernel/$_tag/kernel.release
+
+	# allow the initramfs generators to know the package name the kernel came from
+	echo "${subpkgname:-$pkgname}" > "$_outdir"/lib/modules/$_abi_release/pkgname
+}
+
+dev() {
+	cd "$_builddir"
+	local _abi_release="$(make -s kernelrelease)"
+	# copy the only the parts that we really need for build 3rd party
+	# kernel modules and install those as /usr/src/linux-headers,
+	# simlar to what ubuntu does
+	#
+	# this way you dont need to install the 300-400 kernel sources to
+	# build a tiny kernel module
+	#
+	pkgdesc="Headers and script for third party modules for SpacemiT K1 kernel"
+	depends="$_depends_dev"
+
+	local dir="$subpkgdir"/usr/src/linux-headers-$_abi_release
+
+	# first we import config, run prepare to set up for building
+	# external modules, and create the scripts
+	mkdir -p "$dir"
+	cp "$_builddir"/.config "$dir"/.config
+	echo "-$pkgrel-Alpine" > "$dir"/localversion-alpine
+
+	make -j1 -C "$builddir" ARCH="$_karch" O="$dir" \
+		syncconfig prepare modules_prepare scripts
+
+	# remove the stuff that points to real sources. we want 3rd party
+	# modules to believe this is the soruces
+	rm "$dir"/Makefile "$dir"/source
+
+	# copy the needed stuff from real sources
+	#
+	# this is taken from ubuntu kernel build script
+	# http://kernel.ubuntu.com/git/ubuntu/ubuntu-zesty.git/tree/debian/rules.d/3-binary-indep.mk
+	cd "$builddir"
+	find .  -path './include/*' -prune \
+		-o -path './scripts/*' -prune -o -type f \
+		\( -name 'Makefile*' -o -name 'Kconfig*' -o -name 'Kbuild*' -o \
+		   -name '*.sh' -o -name '*.pl' -o -name '*.lds' \) \
+		-print | cpio -pdm "$dir"
+
+	cp -a scripts include "$dir"
+	find $(find arch -name include -type d -print) -type f \
+		| cpio -pdm "$dir"
+
+	install -Dm644 "$_builddir"/Module.symvers \
+		"$dir"/Module.symvers
+
+	mkdir -p "$subpkgdir"/lib/modules/$_abi_release
+	ln -sf /usr/src/linux-headers-$_abi_release \
+		"$subpkgdir"/lib/modules/$_abi_release/build
+}
+
+sha512sums="
+2fcc962473f1a4c20dc8d971727060624aae7267f6c9cf71f47744638b3f34a092a05af1cac442b256c34b9cc0faa376c42ea0de1fc443c23b7f87fa3a751303  k1-bl-v2.2.7-release.tar.gz
+48e792123df0c182d3c2999a63ebf723fe80e0b3ef8afdc4ced819900a4a504c20d6e90108af14005d4acef7b72e577566f15a909d73af6af6a796a57c076eab  common-changes.config
+"

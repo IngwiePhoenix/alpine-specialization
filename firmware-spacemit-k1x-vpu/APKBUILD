@@ -1,0 +1,38 @@
+# Contributor: Ingwie Phoenix <ingwie@birb.it>
+# Maintainer: Ingwie Phoenix <ingwie@birb.it>
+
+pkgname=firmware-spacemit-k1x-vpu
+
+_tag=k1-bl-v2.2.7
+_suffix=-release
+_ver=2.2.7
+_git_branch=k1-bl-v2.2.y
+_fullname="${pkgname}-${_tag}${_suffix}"
+
+pkgver=$_ver
+pkgrel=0
+pkgdesc="Firmware for the Linlon-v5 in SpacemiT K1x"
+url="https://github.com/spacemit-com/k1x-vpu-firmware/tree/$_git_branch"
+arch="riscv64"
+license="BSD 3-Clause License"
+depends=""
+makedepends=""
+checkdepends=""
+install=""
+subpackages=""
+source="${_fullname}.tar.gz::https://github.com/spacemit-com/k1x-vpu-firmware/archive/refs/tags/${_tag}${_suffix}.tar.gz"
+builddir="$srcdir/"
+
+check() {
+	# nnop
+	:
+}
+
+package() {
+	mkdir -p "$pkgdir/lib"
+	cp -Rv "$builddir/k1x-vpu-firmware-${_tag}${_suffix}/lib/"* "$pkgdir/lib/"
+}
+
+sha512sums="
+8649ee1571d3e971e920ceee96a3d6412aea9f49398acd839f4dcd9538e1ae1d3debac081394252922a07691f8031e7066dace9d65c70a75bde55a1f378c1c6a  firmware-spacemit-k1x-vpu-k1-bl-v2.2.7-release.tar.gz
+"

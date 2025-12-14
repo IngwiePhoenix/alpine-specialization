@@ -1,0 +1,37 @@
+maintainer="Achill Gilgenast <achill@achill.org>"
+_tag=k1-bl-v2.2.7-release
+pkgver=2.2.7
+pkgname=linux-headers-spacemit-k1
+pkgrel=0
+pkgdesc="Linux system headers from the SpacemiT K1 vendor kernel"
+url="https://github.com/spacemit-com/linux-6.6/tree/k1-bl-v2.2.y"
+arch="riscv64"
+license="GPL-2.0-only"
+makedepends="perl"
+options="!check !dbg !strip !tracedeps !archcheck"
+source="https://github.com/spacemit-com/linux-6.6/archive/refs/tags/${_tag}.tar.gz"
+builddir="$srcdir/linux-6.6-$_tag"
+
+build() {
+	cd $builddir
+
+	# Someone smart thought that arch/riscv is fine,
+	# but that CBUILD=riscv64 is also correct.
+	# Bro, which one is it? xD
+	make headers ARCH="riscv"
+}
+
+package() {
+	mkdir -p "$pkgdir"/usr/
+	cp -a usr/include/ "$pkgdir"/usr/include/
+
+	msg "purging non header files.."
+	find "$pkgdir"/usr/include/ ! -iname "*.h" -type f -exec rm -v {} \+
+
+	# provided by libdrm
+	rm -rf "$pkgdir"/usr/include/drm
+}
+
+sha512sums="
+2fcc962473f1a4c20dc8d971727060624aae7267f6c9cf71f47744638b3f34a092a05af1cac442b256c34b9cc0faa376c42ea0de1fc443c23b7f87fa3a751303  k1-bl-v2.2.7-release.tar.gz
+"
